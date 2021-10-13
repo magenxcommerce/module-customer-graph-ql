@@ -13,9 +13,7 @@ use Magento\Customer\Api\Data\CustomerInterfaceFactory;
 use Magento\Framework\Api\DataObjectHelper;
 use Magento\Framework\Exception\LocalizedException;
 use Magento\Framework\GraphQl\Exception\GraphQlInputException;
-use Magento\Framework\Reflection\DataObjectProcessor;
-use Magento\Newsletter\Model\SubscriptionManagerInterface;
-use Magento\Store\Api\Data\StoreInterface;
+use Magento\Store\Model\StoreManagerInterface;
 
 /**
  * Create new customer account
@@ -38,68 +36,53 @@ class CreateCustomerAccount
     private $accountManagement;
 
     /**
-     * @var ValidateCustomerData
+     * @var StoreManagerInterface
      */
-    private $validateCustomerData;
+    private $storeManager;
 
     /**
-     * @var DataObjectProcessor
+     * @var ChangeSubscriptionStatus
      */
-    private $dataObjectProcessor;
+    private $changeSubscriptionStatus;
 
     /**
-     * @var SubscriptionManagerInterface
-     */
-    private $subscriptionManager;
-
-    /**
-     * CreateCustomerAccount constructor.
-     *
      * @param DataObjectHelper $dataObjectHelper
      * @param CustomerInterfaceFactory $customerFactory
+     * @param StoreManagerInterface $storeManager
      * @param AccountManagementInterface $accountManagement
-     * @param DataObjectProcessor $dataObjectProcessor
-     * @param ValidateCustomerData $validateCustomerData
-     * @param SubscriptionManagerInterface $subscriptionManager
+     * @param ChangeSubscriptionStatus $changeSubscriptionStatus
      */
     public function __construct(
         DataObjectHelper $dataObjectHelper,
         CustomerInterfaceFactory $customerFactory,
+        StoreManagerInterface $storeManager,
         AccountManagementInterface $accountManagement,
-        DataObjectProcessor $dataObjectProcessor,
-        ValidateCustomerData $validateCustomerData,
-        SubscriptionManagerInterface $subscriptionManager
+        ChangeSubscriptionStatus $changeSubscriptionStatus
     ) {
         $this->dataObjectHelper = $dataObjectHelper;
         $this->customerFactory = $customerFactory;
         $this->accountManagement = $accountManagement;
-        $this->validateCustomerData = $validateCustomerData;
-        $this->dataObjectProcessor = $dataObjectProcessor;
-        $this->subscriptionManager = $subscriptionManager;
+        $this->storeManager = $storeManager;
+        $this->changeSubscriptionStatus = $changeSubscriptionStatus;
     }
 
     /**
      * Creates new customer account
      *
      * @param array $data
-     * @param StoreInterface $store
      * @return CustomerInterface
      * @throws GraphQlInputException
      */
-    public function execute(array $data, StoreInterface $store): CustomerInterface
+    public function execute(array $data): CustomerInterface
     {
         try {
-            $customer = $this->createAccount($data, $store);
+            $customer = $this->createAccount($data);
         } catch (LocalizedException $e) {
             throw new GraphQlInputException(__($e->getMessage()));
         }
 
         if (isset($data['is_subscribed'])) {
-            if ((bool)$data['is_subscribed']) {
-                $this->subscriptionManager->subscribeCustomer((int)$customer->getId(), (int)$store->getId());
-            } else {
-                $this->subscriptionManager->unsubscribeCustomer((int)$customer->getId(), (int)$store->getId());
-            }
+            $this->changeSubscriptionStatus->execute((int)$customer->getId(), (bool)$data['is_subscribed']);
         }
         return $customer;
     }
@@ -108,27 +91,18 @@ class CreateCustomerAccount
      * Create account
      *
      * @param array $data
-     * @param StoreInterface $store
      * @return CustomerInterface
      * @throws LocalizedException
      */
-    private function createAccount(array $data, StoreInterface $store): CustomerInterface
+    private function createAccount(array $data): CustomerInterface
     {
         $customerDataObject = $this->customerFactory->create();
-        /**
-         * Add required attributes for customer entity
-         */
-        $requiredDataAttributes = $this->dataObjectProcessor->buildOutputDataArray(
-            $customerDataObject,
-            CustomerInterface::class
-        );
-        $data = array_merge($requiredDataAttributes, $data);
-        $this->validateCustomerData->execute($data);
         $this->dataObjectHelper->populateWithArray(
             $customerDataObject,
             $data,
             CustomerInterface::class
         );
+        $store = $this->storeManager->getStore();
         $customerDataObject->setWebsiteId($store->getWebsiteId());
         $customerDataObject->setStoreId($store->getId());
 
