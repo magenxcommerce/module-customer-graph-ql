@@ -7,14 +7,16 @@ declare(strict_types=1);
 
 namespace Magento\CustomerGraphQl\Model\Resolver;
 
-use Magento\CustomerGraphQl\Model\Customer\CreateCustomerAccount;
-use Magento\CustomerGraphQl\Model\Customer\ExtractCustomerData;
+use Magento\CustomerGraphQl\Model\Customer\ChangeSubscriptionStatus;
+use Magento\CustomerGraphQl\Model\Customer\CreateAccount;
+use Magento\CustomerGraphQl\Model\Customer\CustomerDataProvider;
+use Magento\CustomerGraphQl\Model\Customer\SetUpUserContext;
+use Magento\Framework\Exception\State\InputMismatchException;
 use Magento\Framework\GraphQl\Config\Element\Field;
 use Magento\Framework\GraphQl\Exception\GraphQlInputException;
 use Magento\Framework\GraphQl\Query\ResolverInterface;
 use Magento\Framework\GraphQl\Schema\Type\ResolveInfo;
-use Magento\Newsletter\Model\Config;
-use Magento\Store\Model\ScopeInterface;
+use Magento\Framework\Validator\Exception as ValidatorException;
 
 /**
  * Create customer account resolver
@@ -22,35 +24,41 @@ use Magento\Store\Model\ScopeInterface;
 class CreateCustomer implements ResolverInterface
 {
     /**
-     * @var ExtractCustomerData
+     * @var CustomerDataProvider
      */
-    private $extractCustomerData;
+    private $customerDataProvider;
 
     /**
-     * @var CreateCustomerAccount
+     * @var ChangeSubscriptionStatus
      */
-    private $createCustomerAccount;
+    private $changeSubscriptionStatus;
 
     /**
-     * @var Config
+     * @var CreateAccount
      */
-    private $newsLetterConfig;
+    private $createAccount;
 
     /**
-     * CreateCustomer constructor.
-     *
-     * @param ExtractCustomerData $extractCustomerData
-     * @param CreateCustomerAccount $createCustomerAccount
-     * @param Config $newsLetterConfig
+     * @var SetUpUserContext
+     */
+    private $setUpUserContext;
+
+    /**
+     * @param CustomerDataProvider $customerDataProvider
+     * @param ChangeSubscriptionStatus $changeSubscriptionStatus
+     * @param SetUpUserContext $setUpUserContext
+     * @param CreateAccount $createAccount
      */
     public function __construct(
-        ExtractCustomerData $extractCustomerData,
-        CreateCustomerAccount $createCustomerAccount,
-        Config $newsLetterConfig
+        CustomerDataProvider $customerDataProvider,
+        ChangeSubscriptionStatus $changeSubscriptionStatus,
+        SetUpUserContext $setUpUserContext,
+        CreateAccount $createAccount
     ) {
-        $this->newsLetterConfig = $newsLetterConfig;
-        $this->extractCustomerData = $extractCustomerData;
-        $this->createCustomerAccount = $createCustomerAccount;
+        $this->customerDataProvider = $customerDataProvider;
+        $this->changeSubscriptionStatus = $changeSubscriptionStatus;
+        $this->createAccount = $createAccount;
+        $this->setUpUserContext = $setUpUserContext;
     }
 
     /**
@@ -63,22 +71,25 @@ class CreateCustomer implements ResolverInterface
         array $value = null,
         array $args = null
     ) {
-        if (empty($args['input']) || !is_array($args['input'])) {
+        if (!isset($args['input']) || !is_array($args['input']) || empty($args['input'])) {
             throw new GraphQlInputException(__('"input" value should be specified'));
         }
-
-        if (!$this->newsLetterConfig->isActive(ScopeInterface::SCOPE_STORE)) {
-            $args['input']['is_subscribed'] = false;
+        try {
+            $customer = $this->createAccount->execute($args);
+            $customerId = (int)$customer->getId();
+            $this->setUpUserContext->execute($context, $customer);
+            if (array_key_exists('is_subscribed', $args['input'])) {
+                if ($args['input']['is_subscribed']) {
+                    $this->changeSubscriptionStatus->execute($customerId, true);
+                }
+            }
+            $data = $this->customerDataProvider->getCustomerById($customerId);
+        } catch (ValidatorException $e) {
+            throw new GraphQlInputException(__($e->getMessage()));
+        } catch (InputMismatchException $e) {
+            throw new GraphQlInputException(__($e->getMessage()));
         }
-        if (isset($args['input']['date_of_birth'])) {
-            $args['input']['dob'] = $args['input']['date_of_birth'];
-        }
-        $customer = $this->createCustomerAccount->execute(
-            $args['input'],
-            $context->getExtensionAttributes()->getStore()
-        );
 
-        $data = $this->extractCustomerData->execute($customer);
         return ['customer' => $data];
     }
 }

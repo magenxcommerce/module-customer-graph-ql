@@ -7,14 +7,18 @@ declare(strict_types=1);
 
 namespace Magento\CustomerGraphQl\Model\Resolver;
 
-use Magento\CustomerGraphQl\Model\Customer\Address\CreateCustomerAddress as CreateCustomerAddressModel;
-use Magento\CustomerGraphQl\Model\Customer\Address\ExtractCustomerAddressData;
-use Magento\Framework\GraphQl\Exception\GraphQlAuthorizationException;
+use Magento\Customer\Api\AddressRepositoryInterface;
+use Magento\Customer\Api\Data\AddressInterfaceFactory;
+use Magento\Customer\Api\Data\AddressInterface;
+use Magento\CustomerGraphQl\Model\Customer\Address\CustomerAddressCreateDataValidator;
+use Magento\CustomerGraphQl\Model\Customer\Address\CustomerAddressDataProvider;
+use Magento\CustomerGraphQl\Model\Customer\CheckCustomerAccount;
+use Magento\Framework\Api\DataObjectHelper;
+use Magento\Framework\Exception\InputException;
 use Magento\Framework\GraphQl\Exception\GraphQlInputException;
 use Magento\Framework\GraphQl\Schema\Type\ResolveInfo;
 use Magento\Framework\GraphQl\Config\Element\Field;
 use Magento\Framework\GraphQl\Query\ResolverInterface;
-use Magento\GraphQl\Model\Query\ContextInterface;
 
 /**
  * Customers address create, used for GraphQL request processing
@@ -22,25 +26,57 @@ use Magento\GraphQl\Model\Query\ContextInterface;
 class CreateCustomerAddress implements ResolverInterface
 {
     /**
-     * @var CreateCustomerAddressModel
+     * @var CheckCustomerAccount
      */
-    private $createCustomerAddress;
+    private $checkCustomerAccount;
 
     /**
-     * @var ExtractCustomerAddressData
+     * @var AddressRepositoryInterface
      */
-    private $extractCustomerAddressData;
+    private $addressRepository;
 
     /**
-     * @param CreateCustomerAddressModel $createCustomerAddress
-     * @param ExtractCustomerAddressData $extractCustomerAddressData
+     * @var AddressInterfaceFactory
+     */
+    private $addressInterfaceFactory;
+
+    /**
+     * @var CustomerAddressDataProvider
+     */
+    private $customerAddressDataProvider;
+
+    /**
+     * @var DataObjectHelper
+     */
+    private $dataObjectHelper;
+
+    /**
+     * @var CustomerAddressCreateDataValidator
+     */
+    private $customerAddressCreateDataValidator;
+
+    /**
+     * @param CheckCustomerAccount $checkCustomerAccount
+     * @param AddressRepositoryInterface $addressRepository
+     * @param AddressInterfaceFactory $addressInterfaceFactory
+     * @param CustomerAddressDataProvider $customerAddressDataProvider
+     * @param DataObjectHelper $dataObjectHelper
+     * @param CustomerAddressCreateDataValidator $customerAddressCreateDataValidator
      */
     public function __construct(
-        CreateCustomerAddressModel $createCustomerAddress,
-        ExtractCustomerAddressData $extractCustomerAddressData
+        CheckCustomerAccount $checkCustomerAccount,
+        AddressRepositoryInterface $addressRepository,
+        AddressInterfaceFactory $addressInterfaceFactory,
+        CustomerAddressDataProvider $customerAddressDataProvider,
+        DataObjectHelper $dataObjectHelper,
+        CustomerAddressCreateDataValidator $customerAddressCreateDataValidator
     ) {
-        $this->createCustomerAddress = $createCustomerAddress;
-        $this->extractCustomerAddressData = $extractCustomerAddressData;
+        $this->checkCustomerAccount = $checkCustomerAccount;
+        $this->addressRepository = $addressRepository;
+        $this->addressInterfaceFactory = $addressInterfaceFactory;
+        $this->customerAddressDataProvider = $customerAddressDataProvider;
+        $this->dataObjectHelper = $dataObjectHelper;
+        $this->customerAddressCreateDataValidator = $customerAddressCreateDataValidator;
     }
 
     /**
@@ -53,16 +89,36 @@ class CreateCustomerAddress implements ResolverInterface
         array $value = null,
         array $args = null
     ) {
-        /** @var ContextInterface $context */
-        if (false === $context->getExtensionAttributes()->getIsCustomer()) {
-            throw new GraphQlAuthorizationException(__('The current customer isn\'t authorized.'));
-        }
+        $currentUserId = $context->getUserId();
+        $currentUserType = $context->getUserType();
 
-        if (empty($args['input']) || !is_array($args['input'])) {
-            throw new GraphQlInputException(__('"input" value should be specified'));
-        }
+        $this->checkCustomerAccount->execute($currentUserId, $currentUserType);
+        $this->customerAddressCreateDataValidator->validate($args['input']);
 
-        $address = $this->createCustomerAddress->execute($context->getUserId(), $args['input']);
-        return $this->extractCustomerAddressData->execute($address);
+        $address = $this->createCustomerAddress((int)$currentUserId, $args['input']);
+        return $this->customerAddressDataProvider->getAddressData($address);
+    }
+
+    /**
+     * Create customer address
+     *
+     * @param int $customerId
+     * @param array $addressData
+     * @return AddressInterface
+     * @throws GraphQlInputException
+     */
+    private function createCustomerAddress(int $customerId, array $addressData) : AddressInterface
+    {
+        /** @var AddressInterface $address */
+        $address = $this->addressInterfaceFactory->create();
+        $this->dataObjectHelper->populateWithArray($address, $addressData, AddressInterface::class);
+        $address->setCustomerId($customerId);
+
+        try {
+            $address = $this->addressRepository->save($address);
+        } catch (InputException $e) {
+            throw new GraphQlInputException(__($e->getMessage()), $e);
+        }
+        return $address;
     }
 }

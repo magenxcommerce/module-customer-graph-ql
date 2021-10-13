@@ -9,7 +9,6 @@ namespace Magento\CustomerGraphQl\Model\Customer;
 
 use Magento\Customer\Model\AuthenticationInterface;
 use Magento\Framework\Exception\InvalidEmailOrPasswordException;
-use Magento\Framework\Exception\State\UserLockedException;
 use Magento\Framework\GraphQl\Exception\GraphQlAuthenticationException;
 
 /**
@@ -43,9 +42,9 @@ class CheckCustomerPassword
         try {
             $this->authentication->authenticate($customerId, $password);
         } catch (InvalidEmailOrPasswordException $e) {
-            throw new GraphQlAuthenticationException(__($e->getMessage()), $e);
-        } catch (UserLockedException $e) {
-            throw new GraphQlAuthenticationException(__($e->getMessage()), $e);
+            throw new GraphQlAuthenticationException(
+                __('The password doesn\'t match this account. Verify the password and try again.')
+            );
         }
     }
 }
